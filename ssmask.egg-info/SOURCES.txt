@@ -1,0 +1,7 @@
+setup.py
+ssmask/__init__.py
+ssmask/filter.py
+ssmask.egg-info/PKG-INFO
+ssmask.egg-info/SOURCES.txt
+ssmask.egg-info/dependency_links.txt
+ssmask.egg-info/top_level.txt
