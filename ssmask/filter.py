@@ -3,7 +3,7 @@ import numpy as np
 
 c = 3e8
 
-def make_filter(f0, eps_eff, bend_radius, h_staple, w_mstrip, Qc_gap, layer):
+def make_filter(f0, eps_eff, bend_radius, h_staple, w_mstrip, Qc_gap, layer, name=None):
     '''
     Creates a phidl Device of a single-pole microstrip filter.
 
@@ -15,6 +15,7 @@ def make_filter(f0, eps_eff, bend_radius, h_staple, w_mstrip, Qc_gap, layer):
         w_mstrip <float>: microstrip width in microns
         Qc_gap <float>: coupling gap distance in microns between the staple and the output line
         layer: layer of the Device
+        name: name of the Device
     Returns:
         D <phidl.device_layout.Device>: Device object representing the filter
     '''
@@ -23,7 +24,10 @@ def make_filter(f0, eps_eff, bend_radius, h_staple, w_mstrip, Qc_gap, layer):
     l_open = l_staple
 
     # create Device objects
-    D = pg.Device()
+    if name is not None:
+        D = pg.Device(name)
+    else:
+        D = pg.Device()
 
     A = pg.arc(radius = bend_radius, width = w_mstrip, theta = 90, layer=layer)
 
@@ -72,11 +76,14 @@ def make_filter(f0, eps_eff, bend_radius, h_staple, w_mstrip, Qc_gap, layer):
     arc3.connect(port = 1, destination = rect3.ports['2'])
     rect4.connect(port = '1', destination = arc3.ports[2])
 
+    # add a port to connect to for the filtered mm-wave signal
+    D.add_port(name='output', midpoint=(w_mstrip/2, arc3.ymax), orientation=90)
+
     return D
 
 def make_filterbank(f0s, spacing, eps_eff, bend_radius, h_staple, w_mstrip, Qc_gap, layer):
     '''
-    Creates a phidl Device of a single-pole microstrip filter.
+    Creates a phidl Device of a filterbank.
 
     Parameters:
         f0s <array>: array of resonant frequencies in Hz
@@ -85,25 +92,32 @@ def make_filterbank(f0s, spacing, eps_eff, bend_radius, h_staple, w_mstrip, Qc_g
     Returns:
         D_bank <phidl.device_layout.Device>: Device object representing the filterbank
     '''
-    D_filts = []
     ref_filts = []
     D_bank = pg.Device()
     for ii in range(len(f0s)):
+        # generate a filter with resonant frequency f0
         f0 = f0s[ii]
-        D_filt = make_filter(f0, eps_eff, bend_radius, h_staple, w_mstrip, Qc_gap, layer=layer)
-        D_filts.append(D_filt)
+        D_filt = make_filter(f0, eps_eff, bend_radius, h_staple, w_mstrip, Qc_gap, layer, name=ii)
+
+        # reference the filter within the bank and keep track of the reference
         ref = D_bank << D_filt
         ref_filts.append(ref)
         
+        # move the filter to the correct location in the bank
         if ii > 0:
             filt_dist = c/(f0*eps_eff**.5) * spacing * 1e6
             ref.move((ref_filts[ii-1].xmin-filt_dist, 0))
+
+        # propagate the filter's output port up to the bank
+        port = ref.ports['output']
+        D_bank.add_port(f'{ii}', midpoint=port.midpoint, orientation=port.orientation)
             
+    # move the filterbank to the origin
     D_bank.move((-D_bank.xmin, 0))
     return D_bank
 
 def make_kid(w0, wtrans, wfin, h0, l0, ltrans, lfin, final_gap, final_h,
-             llip, wC, hC, Cgap, w_readout, layer):
+             llip, wC, hC, Cgap, w_readout, layer, name=None):
     '''
     Creates a phidl Device of a lumped-element KID with a tapered microstrip inductor
     and a parallel plate capacitor. The mm-wave signal is to be injected into the center of the inductor.
@@ -124,12 +138,18 @@ def make_kid(w0, wtrans, wfin, h0, l0, ltrans, lfin, final_gap, final_h,
         Cgap: gap between the capacitor plates
         w_readout: width of the readout line which will couple the KID PPC to the readout PPC
         layer: layer of the Device
+        name: name of the Device
     Returns:
         D <phidl.device_layout.Device>: Device object representing the KID
     '''
 
     # initialize Device objects
     D = pg.Device()
+    if name:
+        D = pg.Device(name)
+    else:
+        D = pg.Device()
+
     C0 = pg.C(width=w0, size=((l0-h0)/2-w0/2, h0-w0), layer=layer)
     R0 = pg.rectangle(size=(ltrans, wtrans), layer=layer)
     R0.add_port(name='1', midpoint=(0,wtrans/2), orientation=180)
@@ -176,12 +196,12 @@ def make_kid(w0, wtrans, wfin, h0, l0, ltrans, lfin, final_gap, final_h,
     rect7.connect(port='1', destination=rect3.ports['2'])
 
     # add ports for connecting the KID to mm-wave signal and readout coupling capacitor
-    D.add_port(name='readout', midpoint=(rect7.xmax, rect7.ymin+w_readout/2), orientation=0)
+    D.add_port(name='coupling', midpoint=(rect7.xmax, rect7.ymin+w_readout/2), orientation=0)
     D.add_port(name='mmwave', midpoint=(startc.xmin, startc.ymax/2), orientation=180)
 
     return D
 
-def make_readout_ppc(wCc, hCc, Ccgap, lin, lout, wms, layer):
+def make_readout_ppc(wCc, hCc, Ccgap, lin, lout, wms, layer, name=None):
     '''
     Creates a phidl Device of a parallel plate capacitor for readout.
 
@@ -193,12 +213,18 @@ def make_readout_ppc(wCc, hCc, Ccgap, lin, lout, wms, layer):
         lout: output length of microstrip going to the readout thru line
         wms: microstrip width
         layer: layer of the Device
+        name: name of the Device
     Returns:
         D <phidl.device_layout.Device>: Device object representing the PPC
     '''
 
     # initialize Device objects
     D = pg.Device()
+    if name:
+        D = pg.Device(name)
+    else:
+        D = pg.Device()
+
     R0 = pg.rectangle(size=(lin, wms), layer=layer)
     R0.add_port(name='2', midpoint=(R0.xsize,wms/2), orientation=0)
     R1 = pg.rectangle(size=((wCc-Ccgap)/2, hCc), layer=layer)
@@ -226,3 +252,108 @@ def make_readout_ppc(wCc, hCc, Ccgap, lin, lout, wms, layer):
     D.add_port(name='thru', midpoint=(D.xsize, wms/2), orientation=0)
 
     return D
+
+def make_kid_array(w0, wtrans, wfin, h0, l0, ltrans, lfin, final_gap, final_h,
+                   llip, wC_arr, hC, Cgap, w_readout, 
+                   wCc_arr, hCc, Ccgap, lin, lout, wms, readout_dist, layer):
+    
+    ref_arr = []
+    Darray = pg.Device()
+    for ii in range(len(wC_arr)):
+        Dkid = make_kid(w0, wtrans, wfin, h0, l0, ltrans, lfin, final_gap, final_h,
+                        llip, wC_arr[ii], hC, Cgap, w_readout, layer)
+        Dppc = make_readout_ppc(wCc_arr[ii], hCc, Ccgap, lin, lout, wms, layer)
+        
+        ppc_ref = Dkid << Dppc
+        ppc_ref.connect(port='kid', destination=Dkid.ports['coupling'])
+        Dkid.move((-Dkid.xmax, 0))
+        Dkid.mirror([0,0],[0,1])
+        ref = Darray << Dkid
+        ref_arr.append(ref)
+        
+        if ii > 0:
+            ref.move((0, ref_arr[ii-1].ymax+readout_dist))
+
+    return Darray
+
+def make_single_ppc(wCc, hCc, lms, wms, layer):
+    '''
+    Creates a single plate connected to a short microstrip line. This is used as a single plate of
+    a PPC to couple across a substrate layer.
+
+    Parameters (all lengths are in microns):
+        wCc: width of the PPC plate
+        hCc: height of the PPC plate
+        lms: length of microstrip connected to the plate
+        wms: width of microstrip connected to the plate
+        ms_portname <string>: name of the microstrip port
+        layer: layer of the Device
+    Returns:
+        D <phidl.device_layout.Device>: Device object representing the PPC plate
+    '''
+
+    # initialize Device objects
+    D = pg.Device()
+    R0 = pg.rectangle(size=(lms, wms), layer=layer)
+    R0.add_port(name='2', midpoint=(R0.xsize,wms/2), orientation=0)
+    R1 = pg.rectangle(size=(wCc, hCc), layer=layer)
+    R1.add_port(name='1', midpoint=(0, wms/2), orientation=180)
+
+    # make references and connect them
+    rect0 = D << R0
+    rect1 = D << R1
+    rect1.connect(port='1', destination=rect0.ports['2'])
+
+    # add port for connecting the microstrip to the KID or to readout
+    D.add_port(name='ms', midpoint=(0, wms/2), orientation=180)
+    # add ports for aligning this plate to another plate
+    D.add_port(name='1', midpoint=(rect1.xmin, rect1.ymin), orientation=180)
+    D.add_port(name='2', midpoint=(rect1.xmax, rect1.ymin), orientation=180)
+
+    return D
+
+def make_kid_array_single_ppc(w0, wtrans, wfin, h0, l0, ltrans, lfin, final_gap, final_h,
+                              llip, wC_arr, hC, Cgap, wCc_arr, hCc, lin, lout, wms, readout_dist, 
+                              kid_layer, readout_layer):
+    
+    ref_arr = []
+    Darray = pg.Device()
+    for ii in range(len(wC_arr)):
+        # generate the KID and two coupling parallel plates, one on the KID layer and one on the readout layer
+        Dkid = make_kid(w0, wtrans, wfin, h0, l0, ltrans, lfin, final_gap, final_h,
+                        llip, wC_arr[ii], hC, Cgap, wms, kid_layer)
+        Dppkid = make_single_ppc(wCc_arr[ii], hCc, lin, wms, kid_layer)
+        Dppreadout = make_single_ppc(wCc_arr[ii], hCc, lout, wms, readout_layer)
+        Dppreadout.mirror([0,0],[0,1])
+            
+        # reference the readout coupling plate within the KID coupling plate
+        ppreadout = Dppkid << Dppreadout
+        ppreadout.connect(port='1', destination=Dppkid.ports['2'])
+        # propagate the readout port to the KID plate
+        readout_port = ppreadout.ports['ms']
+        Dppkid.add_port('readout', midpoint=readout_port.midpoint, orientation=readout_port.orientation)
+
+        # reference both parallel plates within the KID
+        ppkid = Dkid << Dppkid
+        ppkid.connect(port='ms', destination=Dkid.ports['coupling'])
+        # propagate the readout port up to the KID
+        readout_port = ppkid.ports['readout']
+        Dkid.add_port('readout', midpoint=readout_port.midpoint, orientation=readout_port.orientation)
+
+        # move the KID to the origin and orient it to the readout feedline
+        Dkid.move((-Dkid.xmax, 0))
+        Dkid.mirror([0,0],[0,1])
+        # reference the KID within the array and keep track of the reference
+        ref = Darray << Dkid
+        ref_arr.append(ref)
+
+        # position the KID within the array
+        if ii > 0:
+            ref.move((0, ref_arr[ii-1].ymax+readout_dist))
+        # propagate the readout port and mm-wave port up to the array
+        readout_port = ref.ports['readout']
+        mmwave_port = ref.ports['mmwave']
+        Darray.add_port(f'readout{ii}', midpoint=readout_port.midpoint, orientation=readout_port.orientation)
+        Darray.add_port(f'mmwave{ii}', midpoint=mmwave_port.midpoint, orientation=mmwave_port.orientation)
+
+    return Darray
