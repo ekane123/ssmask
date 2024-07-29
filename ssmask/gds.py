@@ -1,7 +1,7 @@
 import phidl.geometry as pg
 import numpy as np
 
-c = 3e8
+from ssmask.constants import c
 
 def make_filter(f0, eps_eff, bend_radius, h_staple, w_mstrip, Qc_gap, layer, name=None):
     '''
