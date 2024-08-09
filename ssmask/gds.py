@@ -3,7 +3,7 @@ import numpy as np
 
 from ssmask.constants import c
 
-def make_filter(f0, eps_eff, bend_radius, h_staple, w_mstrip, Qc_gap, layer, name=None):
+def make_filter(f0, eps_eff, bend_radius, h_staple, l_open, w_mstrip, Qc_gap, layer, name=None):
     '''
     Creates a phidl Device of a single-pole microstrip filter.
 
@@ -12,6 +12,8 @@ def make_filter(f0, eps_eff, bend_radius, h_staple, w_mstrip, Qc_gap, layer, nam
         eps_eff <float>: effective dielectric constant of the microstrip TEM mode
         bend_radius <float>: radius in microns of 90 degree bends
         h_staple <float>: height of the vertical (non bendy) part of the half-wave staple
+        l_open <float>: number of wavelengths from the open circuit end of the output line 
+            to the side of the ouput line which borders the staple
         w_mstrip <float>: microstrip width in microns
         Qc_gap <float>: coupling gap distance in microns between the staple and the output line
         layer: layer of the Device
@@ -19,9 +21,10 @@ def make_filter(f0, eps_eff, bend_radius, h_staple, w_mstrip, Qc_gap, layer, nam
     Returns:
         D <phidl.device_layout.Device>: Device object representing the filter
     '''
-    totlen = c/(f0*eps_eff**.5)/2 * 1e6
+    wavelength = c/(f0*eps_eff**.5) * 1e6
+    totlen = wavelength/2
     l_staple = (totlen-h_staple-np.pi*bend_radius)/2
-    l_open = l_staple
+    l_open_um = wavelength * l_open
 
     # create Device objects
     if name is not None:
@@ -50,10 +53,10 @@ def make_filter(f0, eps_eff, bend_radius, h_staple, w_mstrip, Qc_gap, layer, nam
     R2.add_port(name = '2', midpoint = [l_staple-A.xsize,w_mstrip/2], width = w_mstrip, orientation = 0)
 
     R3 = pg.Device('rect')
-    points =  [(0, 0), (w_mstrip, 0), (w_mstrip, l_open), (0, l_open)]
+    points =  [(0, 0), (w_mstrip, 0), (w_mstrip, l_open_um), (0, l_open_um)]
     R3.add_polygon(points, layer=layer)
     R3.add_port(name = '1', midpoint = [w_mstrip/2,0], width = w_mstrip, orientation = -90)
-    R3.add_port(name = '2', midpoint = [w_mstrip/2,l_open], width = w_mstrip, orientation = 90)
+    R3.add_port(name = '2', midpoint = [w_mstrip/2,l_open_um], width = w_mstrip, orientation = 90)
 
     # create references
     arc0 = D << A
@@ -79,9 +82,12 @@ def make_filter(f0, eps_eff, bend_radius, h_staple, w_mstrip, Qc_gap, layer, nam
     # add a port to connect to for the filtered mm-wave signal
     D.add_port(name='output', midpoint=(w_mstrip/2, arc3.ymax), orientation=90)
 
+    # move the filter up along the y-axis to provide a coupling gap from the input feedline
+    D.move((0, Qc_gap))
+
     return D
 
-def make_filterbank(f0s, spacing, eps_eff, bend_radius, h_staple, w_mstrip, Qc_gap, layer):
+def make_filterbank(f0s, spacing, eps_eff, bend_radius, h_staple, l_open, w_mstrip, Qc_gaps, layer):
     '''
     Creates a phidl Device of a filterbank.
 
@@ -97,7 +103,9 @@ def make_filterbank(f0s, spacing, eps_eff, bend_radius, h_staple, w_mstrip, Qc_g
     for ii in range(len(f0s)):
         # generate a filter with resonant frequency f0
         f0 = f0s[ii]
-        D_filt = make_filter(f0, eps_eff, bend_radius, h_staple, w_mstrip, Qc_gap, layer, name=ii)
+        Qc_gap = Qc_gaps[ii]
+        D_filt = make_filter(f0, eps_eff, bend_radius, h_staple, 
+                             l_open, w_mstrip, Qc_gap, layer, name=ii)
 
         # reference the filter within the bank and keep track of the reference
         ref = D_bank << D_filt
@@ -114,6 +122,12 @@ def make_filterbank(f0s, spacing, eps_eff, bend_radius, h_staple, w_mstrip, Qc_g
             
     # move the filterbank to the origin
     D_bank.move((-D_bank.xmin, 0))
+
+    # add input feedline
+    R = pg.rectangle(size=(D_bank.xsize, w_mstrip), layer=layer)
+    rect = D_bank << R
+    rect.move((0, -rect.ymax))
+
     return D_bank
 
 def make_kid(w0, wtrans, wfin, h0, l0, ltrans, lfin, final_gap, final_h,
@@ -197,7 +211,7 @@ def make_kid(w0, wtrans, wfin, h0, l0, ltrans, lfin, final_gap, final_h,
 
     # add ports for connecting the KID to mm-wave signal and readout coupling capacitor
     D.add_port(name='coupling', midpoint=(rect7.xmax, rect7.ymin+w_readout/2), orientation=0)
-    D.add_port(name='mmwave', midpoint=(startc.xmin, startc.ymax/2), orientation=180)
+    D.add_port(name='mmwave', midpoint=(startc.xmin+w0, startc.ymax/2), orientation=180)
 
     return D
 
