@@ -1,0 +1,54 @@
+[build-system]
+
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+
+name = "ssmask"
+version = "1.0.0.dev0"
+description = "Functions for designing submillimeter filterbanks"
+readme = "README.md"
+requires-python = ">=3.12"
+license = {file = "LICENSE.txt"}
+keywords = ["kinetic inductance detector"]
+
+  authors = [
+    {name = "Elijah Kane", email = "ekane@caltech.edu"}
+  ]
+
+  maintainers = [
+    {name = "Elijah Kane", email = "ekane@caltech.edu"}
+  ]
+
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Build Tools",
+    "License :: Apache-2.0",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+  "numpy>=1.26.4",
+  "scipy>=1.16.3",
+
+  # Plotting / widgets / UI
+  "matplotlib>=3.10.8",
+  "ipympl>=0.9.8",
+  "ipywidgets>=8.1.8",
+
+  # Notebook environment
+  "jupyterlab>=4.5.0",
+  "tqdm>=4.67.1",
+  "pandas>=2.3.3",
+
+  "phidl>=1.7.2"
+  # "scikit-rf>=1.10.0"
+]
+
+[project.urls]
+"Homepage" = "https://github.com/ekane123/ssmask"
+
+[tool.setuptools]
+package-data = {}

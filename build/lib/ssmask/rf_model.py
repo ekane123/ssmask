@@ -1,7 +1,6 @@
 import numpy as np
 import skrf as rf
-
-from ssmask.constants import c
+from scipy.constants import c
 
 def ABCD2S(A, B, C, D, Z0):
     '''
