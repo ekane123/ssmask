@@ -1,6 +1,7 @@
 import numpy as np
 import skrf as rf
 from scipy.constants import c
+from tqdm.auto import tqdm
 
 def ABCD2S(A, B, C, D, Z0):
     '''
@@ -88,7 +89,9 @@ def TransmissionLineLossy(Band, length, Z0, epsr, lossTan=0):
     Ntwk = rf.Network(frequency=Band, s=S, z0=Z0)
     return Ntwk
 
-def FilterBankLossy(Band, fres, Qc1, Qc2, Qloss, Z0, physSep, epsr, lossTan=0):
+import time
+
+def FilterBankLossy(Band, fres, Qc1, Qc2, Qloss, Z0, physSep, epsr, lossTan=0, verbose=False):
     '''
     Creates a filterbank represented by a cascaded series of spectral channels and lossy transmission lines.
     
@@ -109,26 +112,28 @@ def FilterBankLossy(Band, fres, Qc1, Qc2, Qloss, Z0, physSep, epsr, lossTan=0):
     CurrentNtwk = SpectralChannel3PortNetwork(Band, Z0, fres[0], Qc1[0], Qc2[0], Qloss[0])
         
     # loop to create filter bank with arbitrary # of channels and create network
-    for i in range(len(fres)):
-        if i < len(fres)-1:
-            # resonant frequencies and quality factors for current and next SCs
-            fres_current = fres[i]    
-            fres_nxt, Qc1_nxt, Qc2_nxt, Qloss_nxt = fres[i+1], Qc1[i+1], Qc2[i+1], Qloss[i+1]
-            
-            # create Network object for next SC
-            NextSC = SpectralChannel3PortNetwork(Band, Z0, fres_nxt, Qc1_nxt, Qc2_nxt, Qloss_nxt)
-            
-            # create interconnecting transmission line
-            lambda_current = c/fres_current
-            lineLength = physSep*lambda_current
-            TLine = TransmissionLineLossy(Band, lineLength, Z0, epsr, lossTan)
-            
-            # connect current network to the transmission line
-            N = CurrentNtwk.nports
-            InterNtwk = rf.connect(CurrentNtwk, N-1, TLine, 0)
-            
-            # connect current network to the next SC
-            N = InterNtwk.nports
-            CurrentNtwk = rf.connect(InterNtwk, N-1, NextSC, 0)             
+    pbar = range(len(fres)-1)
+    if verbose:
+        pbar = tqdm(pbar, leave=False)
+    for i in pbar:
+        # resonant frequencies and quality factors for current and next SCs
+        fres_current = fres[i]    
+        fres_nxt, Qc1_nxt, Qc2_nxt, Qloss_nxt = fres[i+1], Qc1[i+1], Qc2[i+1], Qloss[i+1]
+        
+        # create Network object for next SC
+        NextSC = SpectralChannel3PortNetwork(Band, Z0, fres_nxt, Qc1_nxt, Qc2_nxt, Qloss_nxt)
+        
+        # create interconnecting transmission line
+        lambda_current = c/fres_current
+        lineLength = physSep*lambda_current
+        TLine = TransmissionLineLossy(Band, lineLength, Z0, epsr, lossTan)
+        
+        # connect current network to the transmission line
+        N = CurrentNtwk.nports
+        InterNtwk = rf.connect(CurrentNtwk, N-1, TLine, 0)
+        
+        # connect current network to the next SC
+        N = InterNtwk.nports
+        CurrentNtwk = rf.connect(InterNtwk, N-1, NextSC, 0)           
     
     return CurrentNtwk
