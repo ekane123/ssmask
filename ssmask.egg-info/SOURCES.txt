@@ -4,6 +4,7 @@ setup.py
 ssmask/__init__.py
 ssmask/gds.py
 ssmask/gds_Feb2026.py
+ssmask/gds_Mar2026.py
 ssmask/klopfenstein.py
 ssmask/scikit_rf.py
 ssmask/simple_rf_models.py
