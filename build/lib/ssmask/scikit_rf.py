@@ -130,10 +130,100 @@ def FilterBankLossy(Band, fres, Qc1, Qc2, Qloss, Z0, physSep, epsr, lossTan=0, v
         
         # connect current network to the transmission line
         N = CurrentNtwk.nports
-        InterNtwk = rf.connect(CurrentNtwk, N-1, TLine, 0)
+        InterNtwk = rf.network.connect(CurrentNtwk, N-1, TLine, 0)
         
         # connect current network to the next SC
         N = InterNtwk.nports
-        CurrentNtwk = rf.connect(InterNtwk, N-1, NextSC, 0)           
+        CurrentNtwk = rf.network.connect(InterNtwk, N-1, NextSC, 0)           
     
     return CurrentNtwk
+
+def FilterBankLossy_partial(Band, fres, Pcutoff, Qc1, Qc2, Qloss, Z0, physSep, epsr, lossTan=0,
+                            verbose=False):
+    '''
+    Creates a filterbank represented by a cascaded series of spectral channels and lossy transmission lines.
+    Only connects spectral channels to each other whose profiles overlap.
+    
+    Parameters:
+        Band: skrf.Frequency object containing the frequencies at which S-params are calculated
+        Pcutoff <float>: Cutoff f
+        fres <np.array>: array of filter resonant frequencies in Hz
+        Qc1 <np.array>: array of coupling quality factors between the feedline and each filter
+        Qc2 <np.array>: array of coupling quality factors between each filter and its output line
+        Qloss <np.array>: array of resonator loss quality factors
+        Z0 <float>: impedance of feedline and output lines
+        physSep <float>: number of wavelengths separation between successive filters
+        epsr <float>: relative permittivity
+        lossTan <float>: dielectric loss tangent for transmission line sections connecting the filters
+    Returns:
+        Ntwks: list of skrf.Network objects representing the filterbank
+        ixs_in_ntwks: index of each channel in each list
+    '''
+    
+    Qtot = 1/(1/Qc1 + 1/Qc2 + 1/Qloss)
+    
+    ix_groups = []
+    ixs_in_ntwks = np.zeros(len(fres), dtype=int)
+    Qtot = 1/(1/Qc1 + 1/Qc2 + 1/Qloss)
+    dx = (1/Pcutoff - 1)**.5 / (2*Qtot)
+    for ii in range(len(fres)):
+        dxs = abs(fres - fres[ii])/fres[ii]
+        ixs = np.where(dxs<dx)[0]
+        ix_groups.append(ixs)
+        ixs_in_ntwks[ii] = np.where(dxs[ixs]==0)[0][0]
+    
+    Ntwks = []
+    
+    pbar0 = range(len(fres))
+    if verbose:
+        pbar0 = tqdm(pbar0, leave=False)
+            
+    for ii0 in pbar0:
+        ixs = ix_groups[ii0]
+        ii1 = 0
+            
+        for ii1 in range(len(ixs)-1):
+            ix = ixs[ii1]
+            
+            if ii1 == 0:
+                if ix == 0:
+                    # Just initialize the first spectral channel with no transmission line preceding it
+                    Ntwk = SpectralChannel3PortNetwork(Band, Z0, fres[ix], Qc1[ix], Qc2[ix], Qloss[ix])
+                else:
+                    # Generate the transmission line to the first spectral channel
+                    conn_ix = 0
+                    lineLength = 0
+                    while conn_ix < ix:
+                        this_lambda = c/fres[conn_ix]
+                        lineLength += physSep * this_lambda
+                        conn_ix += 1
+                    TLine = TransmissionLineLossy(Band, lineLength, Z0, epsr, lossTan)
+                    # Connect the first spectral channel to the transmission line
+                    this_SC = SpectralChannel3PortNetwork(Band, Z0, fres[ix], Qc1[ix], Qc2[ix], Qloss[ix])
+                    N = TLine.nports
+                    Ntwk = rf.network.connect(TLine, N-1, this_SC, 0, num=1)
+            else:
+                this_SC = SpectralChannel3PortNetwork(Band, Z0, fres[ix], Qc1[ix], Qc2[ix], Qloss[ix])
+                N = Ntwk.nports
+                Ntwk = rf.network.connect(Ntwk, N-1, this_SC, 0, num=1)
+                
+            # Generate the transmission line to the next overlapping spectral channel
+            conn_ix = ix
+            lineLength = 0
+            while conn_ix < ixs[ii1+1]:
+                this_lambda = c/fres[conn_ix]
+                lineLength += physSep * this_lambda
+                conn_ix += 1
+            TLine = TransmissionLineLossy(Band, lineLength, Z0, epsr, lossTan)
+            N = Ntwk.nports
+            Ntwk = rf.network.connect(Ntwk, N-1, TLine, 0, num=1)
+                
+            ii1 += 1
+                
+        ix = ixs[-1]
+        this_SC = SpectralChannel3PortNetwork(Band, Z0, fres[ix], Qc1[ix], Qc2[ix], Qloss[ix])
+        N = Ntwk.nports
+        Ntwk = rf.network.connect(Ntwk, N-1, this_SC, 0, num=1)
+        Ntwks.append(Ntwk)
+        
+    return Ntwks, ixs_in_ntwks

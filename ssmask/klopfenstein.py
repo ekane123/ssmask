@@ -27,7 +27,8 @@ Returns:
     Z: Impedance in each section. The length of each section is L/numSections.
     RL: Return loss of the taper (dB)
 '''
-def calculate_klopfenstein_taper(fLow, fHigh, startFreq, freqStep, stopFreq, numSections, er, ZS, ZL, MaxRL):
+def calculate_klopfenstein_taper(fLow, fHigh, startFreq, freqStep, stopFreq, numSections, 
+                                 er, ZS, ZL, MaxRL):
     # Constants
     C = 299792458;
     # Inputs

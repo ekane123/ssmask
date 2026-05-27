@@ -300,7 +300,7 @@ def solve_for_capacitances(f0, Qc, L, Z0, guess=(1e-11, 1e-13)):
         C, Ceff = p
         return [
             omega0 - 1/(L*(C+Ceff))**.5,
-            Qc - 2*C/(omega0*Z0*Ceff**2)
+            Qc - 8*C/(omega0*Z0*Ceff**2)
         ]
     
     C, Ceff =  fsolve(equations, guess)

@@ -666,6 +666,8 @@ def add_broadbands_to_filterbank(
             coupling_ground_gap[ii], w_coupler[ii], h_coupler[ii], distance_to_cpw,
             ind_layer, cap_layer, ground_layer, detector_index=0)
         D_kid.name = f'broadband_kid_{ii}'
+        if feed_side[ii] == 0:
+            D_kid = D_kid.mirror((0,0), (0,1))
         
         d_kid = Dout << D_kid
         d_kid.connect(port='mmwave_0', destination=bb.ports['1'])
