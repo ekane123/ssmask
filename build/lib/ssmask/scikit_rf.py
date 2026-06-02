@@ -18,6 +18,61 @@ def ABCD2S(A, B, C, D, Z0):
     S22 = (-A+B/Z0-C*Z0+D)/(A+B/Z0+C*Z0+D)
     return np.array([[S11, S12],[S21, S22]])
 
+def get_2port_shunt_Sparams(Z1, Z3, Y2):
+    '''
+    Gets S-parameters for a 2-port network with the following geometry:
+    -----------------
+            |
+   Z1      Y2      Z3
+            |
+    -----------------
+    
+    Parameters:
+        Z1: First port impedance
+        Z3: Second port impedance
+        Y2: Shunt admittance.
+    
+    Returns:
+        S = ((S11, S13), (S31, S33))
+    '''
+    Z2 = 1/Y2
+    Z = Z2*np.ones((2,2))
+    F = np.array([[np.real(Z1)**-.5, 0], [0, np.real(Z3)**-.5]])
+    Finv = np.array([[np.real(Z1)**.5, 0], [0, np.real(Z3)**.5]])
+    Z0 = np.array([[Z1, 0], [0, Z3]])
+    S = np.matmul(np.linalg.inv(Z+Z0), Finv)
+    S = np.matmul(Z-np.conj(Z0), S)
+    S = np.matmul(F, S)
+    return S
+
+
+def get_3PortJunction_Sparams(Z0, Z1):
+    '''
+    Gets the S-parameters for 3 transmission lines joined at a point.
+    Ports 1 and 2 have impedance Z0, and port 3 has impedance Z1.
+    
+    Parameters:
+        Band: skrf.Frequency object containing the frequencies at which S-params are calculated
+        Z0: Impedance of ports 1 and 3.
+        Z1: Impedance of port 2.
+    
+    Returns:
+        S: S-parameters
+    '''
+    S = np.zeros((3,3), dtype=complex)
+    # Calculate S-parameters between ports 1 and 2
+    thisS = get_2port_shunt_Sparams(Z0, Z1, 1/Z0)
+    S[0:2, 0:2] = thisS
+    # calculate S-parameters between ports 1,2 and 3
+    thisS = get_2port_shunt_Sparams(Z0, Z0, 1/Z1)
+    S[0,2] = thisS[0,1]
+    S[2,0] = thisS[1,0]
+    S[1,2] = S[0,2]
+    S[2,1] = S[2,0]
+    S[2,2] = thisS[1,1]
+    
+    return S
+
 def SpectralChannel3PortNetwork(Band, Z0, fres, Qc1, Qc2, Qloss):
     '''
     Creates a 3-port network representing a mm-wave filter.
