@@ -724,4 +724,19 @@ def add_broadbands_to_filterbank(
         Dout.ports[name].name = name
         
     return Dout
+
+#############################
+### T E R M I N A T I O N ###
+#############################
+
+def add_terminator(wtrans, ltrans, wf, meander_start_h, meander_length,
+                    meander_spacing, n_meander):
+    '''
+    Makes a phidl Device representing a terminator.
+    The terminator is composed of many weakly-coupled lossy stubs all
+    coupled to the feedline, which are each designed to have much lower 
+    reflection than absorption.
+    '''
+    D = phidl.Device()
+    
     
