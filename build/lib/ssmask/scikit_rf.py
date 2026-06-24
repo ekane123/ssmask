@@ -74,6 +74,118 @@ def get_3PortJunction_Sparams(Z0, Z1):
     
     return S
 
+def SpectralChannel3PortNetwork_ExtraLine(
+    Band, length, extra_length, Z0, Z1, C, epsr, lossTan=0
+    ):
+    """
+    Create a Network representing a 3-port resonant filter.
+    All ports and transmission lines have impedance Z0.
+    The Network geometry is as follows:
+    
+     port 2
+    |      |
+    |      |    __________________    | C |    ____________    | C |
+    o----------|__ extra_length __|---|   |---|__ length __|---|   |---
+    |      |                          |   |                    |   |  port 1
+    |      |
+    |      o-----------------------------------------------------------
+    |      |
+    |      |
+     port 0
+     
+    The transmission line between the two capacitors is a half-wavelength
+    resonator. In this model, we replace it with an equivalent RLC shunt 
+    to ground, which is approximately correct near its resonant frequency.
+     
+    Parameters:
+    Band (skrf.Frequency): frequencies to simulate the Network at, in Hz.
+    length: length of resonant half-wave filter in meters.
+    extra_length: length of extra transmission line in meters.
+    Z0: impedance of all ports and transmission lines in Ohms.
+    C: coupling capacitance.
+    epsr: relative permittivity of the transmission line.
+    lossTan: dielectric loss tangent of the transmission line. lossTan = 1/Qloss.
+    
+    Returns:
+    Ntwk: skrf.Network object representing the 3-port network.
+    """
+    
+    alpha = np.pi*np.sqrt(epsr)*Band.f/c*lossTan # attenuation constant in Np/m    
+    Qloss = 1/lossTan # Loss Q of the resonator
+    wavelen = 2*length
+    f0 = c / (wavelen * epsr**.5)
+    R = Z0/(alpha * length) # Shunt resistance of the equivalent resonator
+
+    x0 = (Band.f-f0)/f0
+    omega = 2*np.pi*Band.f
+    
+    ### Create a 2-port Network for the extra length of transmission line.
+    Ntwk_extra_TL = TransmissionLineLossy(Band, extra_length, Z1, epsr, lossTan)
+    
+    ### Create a 2-port Network for the capacitor-coupled shunt resonance.
+    Yr = (1 + 2j*Qloss*x0)/R
+    Zc = 1/(1j*omega*C)
+    A = 1 + Zc*Yr
+    B = 2*Zc + Zc**2 * Yr
+    C = Yr
+    D = 1 + Zc*Yr
+    S = ABCD2S(A, B, C, D, Z0)
+    S = np.moveaxis(S, -1, 0)
+    Ntwk_res = rf.Network(frequency=Band, s=S, z0=Z0)
+    
+    ### Create a 3-port Network for the junction.
+    S = get_3PortJunction_Sparams(Z0, Z0)
+    S = np.array([S for _ in x0])
+    Ntwk_junction = rf.Network(frequency=Band, s=S, z0=Z0)
+    
+    ### Join the Networks together.
+    Ntwk = rf.network.connect(Ntwk_extra_TL, 1, Ntwk_res, 0)
+    Ntwk = rf.network.connect(Ntwk_junction, 1, Ntwk, 0)
+    
+    return Ntwk
+    
+def FilterbankLossy_ExtraLine(
+    Band, lengths, extra_length, Z0, Z1, Cs, 
+    epsr, physSep, lossTan=0, verbose=False
+    ):
+    """
+    Creates a filterbank represented by a cascaded series of 
+    spectral channels and lossy transmission lines.
+    """
+    v = c/epsr**.5
+    
+    # initialize current network to the first spectral channel
+    CurrentNtwk = SpectralChannel3PortNetwork_ExtraLine(
+        Band, lengths[0], extra_length, Z0, Z1, Cs[0], epsr, lossTan
+    )
+    # loop to create filter bank with arbitrary # of channels and create network
+    pbar = range(len(lengths)-1)
+    if verbose:
+        pbar = tqdm(pbar, leave=False)
+    for i in pbar:
+        length_current = lengths[i]    
+        length_nxt, C_nxt = lengths[i+1], Cs[i+1]
+        
+        # create Network object for next SC
+        NextSC = SpectralChannel3PortNetwork_ExtraLine(
+            Band, length_nxt, extra_length, Z0, Z1, C_nxt, epsr, lossTan
+        )
+        # create interconnecting transmission line
+        lambda_current = length_current * 2
+        lineLength = physSep*lambda_current
+        TLine = TransmissionLineLossy(Band, lineLength, Z0, epsr, lossTan)
+        
+        # connect current network to the transmission line
+        N = CurrentNtwk.nports
+        InterNtwk = rf.network.connect(CurrentNtwk, N-1, TLine, 0)
+        
+        # connect current network to the next SC
+        N = InterNtwk.nports
+        CurrentNtwk = rf.network.connect(InterNtwk, N-1, NextSC, 0)           
+    
+    return CurrentNtwk
+
+
 def TransmissionLineLossy(Band, length, Z0, epsr, lossTan=0):   
     '''
     Creates a network object representing a lossy transmission line.

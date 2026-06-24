@@ -1,4 +1,4 @@
-name: citkid
+name: ssmask
 channels:
   - conda-forge
 dependencies:
