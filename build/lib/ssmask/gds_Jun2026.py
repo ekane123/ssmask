@@ -1,6 +1,7 @@
 import numpy as np
 import phidl.geometry as pg
 from phidl import Path
+from phidl.device_layout import CrossSection
 import phidl.path as pp
 import phidl.routing as pr
 from scipy.constants import c
@@ -824,14 +825,164 @@ def add_broadbands_to_filterbank(
 ### T E R M I N A T I O N ###
 #############################
 
-def add_terminator(wtrans, ltrans, wf, meander_start_h, meander_length,
-                    meander_spacing, n_meander):
+def add_terminator(
+    D, feed_width_in, feed_width_out, l0, 
+    meander_width, meander_length,
+    meander_side_length, meander_gap,
+    meander_spacings, signal_layer, lossy_layer
+    ):
     '''
     Makes a phidl Device representing a terminator.
     The terminator is composed of many weakly-coupled lossy stubs all
     coupled to the feedline, which are each designed to have much lower 
     reflection than absorption.
     '''
-    D = phidl.Device()
+    Dout = copy.deepcopy(D)
+    old_ports = Dout.ports.values()
+    
+    NewFeedline = pg.rectangle(
+        size=(
+            np.sum(meander_spacings)+meander_side_length+meander_gap+meander_width/2, 
+            feed_width_out),
+        layer=signal_layer
+    )
+    NewFeedline.add_port(
+        name='0', 
+        midpoint=(NewFeedline.xmin, feed_width_out/2), 
+        width=feed_width_out, 
+        orientation=180
+    )
+    # Add ports for connecting the meanders
+    x0 = (meander_side_length+meander_width)/2
+    thisx = x0
+    for ii in range(len(meander_spacings)+1):
+        if ii%2:
+            thisy = 0
+        else:
+            thisy = NewFeedline.ymax
+        NewFeedline.add_port(
+            name=f'meander_{ii}', 
+            midpoint=(thisx, thisy), 
+            width=feed_width_out, 
+            orientation=90*(-1)**ii
+        )
+        if ii < len(meander_spacings):
+            thisx += meander_spacings[ii]
+        
+    def create_meander():
+        Dmeander = pg.Device()
+        
+        Line0 = pg.rectangle(size=(feed_width_out, l0), layer=signal_layer)
+        line0 = Dmeander << Line0
+        
+        x1 = -(meander_side_length-meander_gap+meander_width)/2
+        y1 = -2*meander_gap
+        x2 = x1 + meander_gap
+        y2 = y1 + meander_gap
+        x3 = meander_gap - meander_width/2
+        y3 = y2 + 2*meander_gap
+        manual_path0 = [
+            (0,0),
+            (x1, 0),
+            (x1, y1),
+            (x2, y1),
+            (x2, y2),
+            (x3, y2),
+            (x3, y3)
+        ]
+        P0 = Path(manual_path0)
+        X = CrossSection()
+        X.add(width=meander_width, offset=0, layer=lossy_layer)
+        Line1 = P0.extrude(X)
+        line1 = Dmeander << Line1
+        
+        
+        dx = line0.center[0] - (x1+meander_gap/2)
+        dy = line0.ymax - line1.ymin
+        line1.move(
+            origin=(0, 0), 
+            destination=(dx, dy)
+        )
+        
+        y1 = meander_gap - meander_width/2
+        x1 = -meander_side_length + meander_gap
+        y2 = y1 + 3*meander_gap
+        x2 = 0
+        y3 = y2 + meander_width/2
+        manual_path1 = [
+            (0,0),
+            (0, y1),
+            (x1, y1),
+            (x1, y2),
+            (x2, y2),
+            (x2, y3)
+        ]
+        P1 = Path(manual_path1)
+        Line2 = P1.extrude(X)
+        
+        x0 = meander_gap
+        y0 = meander_gap
+        y1 = y0+meander_gap
+        x1 = x0 -meander_side_length + meander_gap
+        y2 = y1 + meander_gap
+        x2 = x0
+        y3 = y2 + 2*meander_gap + meander_width/2
+        manual_path2 = [
+            (x0, y0),
+            (x0, y1),
+            (x1, y1),
+            (x1, y2),
+            (x2, y2),
+            (x2, y3)
+        ]
+        P2 = Path(manual_path2)
+        Line3 = P2.extrude(X)
+        
+        d2y = Line2.ysize
+        
+        length0 = P0.length()
+        length_per_turn = P1.length() + P2.length()
+        n_turns = int((meander_length - length0)/(length_per_turn)) + 1
+        for _ in range(n_turns):
+            line2 = Dmeander << Line2
+            line3 = Dmeander << Line3
+            line2.move(
+                origin=(0,0),
+                destination=(dx-meander_width/2, dy+meander_width/2)
+            )
+            line3.move(
+                origin=(0,0),
+                destination=(dx-meander_width/2, dy)
+            )
+            
+            dy += d2y
+        
+        Dmeander.add_port(
+            name='in',
+            midpoint=(feed_width_out/2, line0.ymin),
+            orientation=270
+        )
+        
+        return Dmeander
+
+    for ii in range(len(meander_spacings)+1):
+        Dmeander = create_meander()
+        d_meander = NewFeedline << Dmeander
+        d_meander.connect(port='in', destination=NewFeedline.ports[f'meander_{ii}'])
+
+    new_feedline = Dout << NewFeedline
+    new_feedline.connect(port='0', destination=Dout.ports['feedline_out'])
+
+    Dout = Dout.flatten()
+    Dout.ports = {}
+    Dout.add_port(name='feedline_in', midpoint=(Dout.xmin, -feed_width_in/2), 
+                  width=feed_width_in, orientation=180)
+    Dout.add_port(name='feedline_out', midpoint=(Dout.xmax, -feed_width_out/2), 
+                  width=feed_width_out, orientation=0)
+    for port in old_ports:
+        if 'spectral_kid' in port.name or 'broadband' in port.name:
+            Dout.ports[port.name] = port
+
+    return Dout
     
     

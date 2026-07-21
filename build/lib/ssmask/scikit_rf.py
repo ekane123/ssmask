@@ -74,6 +74,45 @@ def get_3PortJunction_Sparams(Z0, Z1):
     
     return S
 
+def ThreePortNetwork_ExtraLine_Absorber(
+    Band, extra_length, Z0, Z1, epsr, lossTan=0
+    ):
+    """
+    Create a Network representing three ports joined together
+    at one location, with the middle Port going to an extra length
+    of transmission line with a lossy absorber of impedance Z1.
+    
+    Parameters:
+    Band (skrf.Frequency): frequencies to simulate the Network at, in Hz.
+    extra_length: length of extra transmission line in meters.
+    Z0: impedance of ports 0 and 2 in Ohms.
+    Z1: impedance of port 1 in Ohms.
+    epsr: relative permittivity of the transmission line.
+    lossTan: dielectric loss tangent of the transmission line. lossTan = 1/Qloss.
+    
+    Returns:
+    Ntwk: skrf.Network object representing the 3-port network.
+    """
+    ### Create a 2-port Network for the extra length of transmission line.
+    Ntwk_extra_TL = TransmissionLineLossy(Band, extra_length, Z0, epsr, lossTan)
+    
+    ### Create a 3-port Network for the junction.
+    S = np.array([get_3PortJunction_Sparams(thisZ, thisZ) for thisZ in Z0])
+    Ntwk_junction = rf.Network(frequency=Band, s=S, z0=Z0)
+    
+    ### Join the Networks together.
+    Ntwk = rf.network.connect(Ntwk_junction, 1, Ntwk_extra_TL, 0)
+    
+    ### Create port reference impedance matrix,
+    ### and renormalize the port impedances of the Network.
+    Zmatrix = np.empty([len(Band.f), 3], dtype=complex)
+    Zmatrix[:, 2] = Z0
+    Zmatrix[:, 0] = Z0
+    Zmatrix[:, 1] = Z1
+    Ntwk.renormalize(Zmatrix, s_def='power')
+    
+    return Ntwk
+
 def SpectralChannel3PortNetwork_ExtraLine(
     Band, length, extra_length, Z0, Z1, C, epsr, lossTan=0
     ):
@@ -109,7 +148,6 @@ def SpectralChannel3PortNetwork_ExtraLine(
     Returns:
     Ntwk: skrf.Network object representing the 3-port network.
     """
-    
     alpha = np.pi*np.sqrt(epsr)*Band.f/c*lossTan # attenuation constant in Np/m    
     Qloss = 1/lossTan # Loss Q of the resonator
     wavelen = 2*length
