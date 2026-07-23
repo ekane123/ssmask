@@ -27,8 +27,10 @@ Returns:
     Z: Impedance in each section. The length of each section is L/numSections.
     RL: Return loss of the taper (dB)
 '''
-def calculate_klopfenstein_taper(fLow, fHigh, startFreq, freqStep, stopFreq, numSections, 
-                                 er, ZS, ZL, MaxRL):
+def calculate_klopfenstein_taper(
+    fLow, freq, numSections, 
+    er, ZS, ZL, MaxRL
+    ):
     # Constants
     C = 299792458;
     # Inputs
@@ -55,7 +57,6 @@ def calculate_klopfenstein_taper(fLow, fHigh, startFreq, freqStep, stopFreq, num
     for i in range(numSections):
         Z[i] = (exp(log(ZL*ZS)/2+rho0*A**2*phi(x[i])/cosh(A))).real;
     # print(Z)
-    freq = np.arange(startFreq,stopFreq,freqStep);
     numFreq = np.size(freq);
     beta = 2*pi/(C/freq/np.sqrt(er));
     Gamma = rho0*np.exp(-1j*beta*L)*np.cos(np.sqrt(np.square(beta*L)-A**2))/cosh(A);
@@ -95,4 +96,4 @@ def calculate_klopfenstein_taper(fLow, fHigh, startFreq, freqStep, stopFreq, num
     # plt.plot(freq,dB);
     # plt.show();
 
-    return np.real(L), freq, Z, RL
+    return np.real(L), Z, RL

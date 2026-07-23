@@ -7,6 +7,10 @@ import phidl.routing as pr
 from scipy.constants import c
 import copy
 
+
+from .klopfenstein import calculate_klopfenstein_taper
+from .simple_rf_models import get_mstrip_params
+
 ###########################
 ### F I L T E R B A N K ###
 ###########################
@@ -825,6 +829,99 @@ def add_broadbands_to_filterbank(
 ### T E R M I N A T I O N ###
 #############################
 
+def add_klopfenstein_taper(
+    D, feed_width_in, feed_width_out,
+    nsamp_width, eps_sub, eps_sup, h_sub,
+    fLow, freqs, numSections, MaxRL, layer
+    ):
+    """
+    Adds a Klopfenstein taper to the end of a filterbank,
+    preceding the terminator structure.
+    
+    Parameters:
+    D: Device to add the taper to.
+    feed_width_in: input width in microns.
+    feed_width_out: output width in microns.
+    nsamp_width (int): Number of width samples 
+        for interpolating between width and microstripline impedance.
+    eps_sub: Relative permittivity of substrate.
+    eps_sub: Relative permittivity of superstrate.
+    h_sub: Height of substrate in meters.
+    fLow: lowest freq taper needs to work at (Hz)
+    freqs: frequencies in Hz to evaluate the taper return loss at.
+    numSections (int): Number of discrete sections for the taper.
+    MaxRL: Maximum acceptable return loss in the passband (dB)
+    
+    Returns:
+    Dout: New Device with the taper added.
+    """
+    Dout = copy.deepcopy(D)
+    old_ports = Dout.ports.values()
+    
+    w_samp = np.linspace(feed_width_in, feed_width_out, nsamp_width) * 1e-6
+    eps_rel, _, _, Z0 = get_mstrip_params(
+        eps_sub, eps_sup, w_samp, h_sub, 0, fLow
+    )
+    eps_rel = np.nanmean(eps_rel.real)
+    Z0 = Z0.real
+    ZS = Z0[0]
+    ZL = Z0[-1]
+    if ZL < ZS:
+        length, Zarr, RL = calculate_klopfenstein_taper(
+            fLow, freqs, numSections, eps_rel, ZL, ZS, MaxRL
+        )
+        Zarr = np.flip(Zarr)
+        Z0 = np.flip(Z0)
+        w_samp = np.flip(w_samp)
+    else:    
+        length, Zarr, RL = calculate_klopfenstein_taper(
+            fLow, freqs, numSections, eps_rel, ZS, ZL, MaxRL
+        )
+    
+    dlength = length/numSections * 1e6
+    widths = np.interp(Zarr, Z0, w_samp) * 1e6
+    widths = np.append(feed_width_in, widths)
+    widths = np.append(widths, feed_width_out)
+    
+    Dtaper = pg.Device()
+    xstart = 0
+    for ii in range(len(widths)-1):
+        thisD = pg.taper(
+            length=dlength, 
+            width1=widths[ii],
+            width2=widths[ii+1],
+            port=None,
+            layer=layer
+        )
+        thisD.ports = {}
+        segment = Dtaper << thisD
+        segment.move(origin=(0, 0), destination=(xstart, 0))
+        xstart += dlength
+    Dtaper.add_port(
+        name='in',
+        midpoint=(Dtaper.xmin, Dtaper.center[1]),
+        width = feed_width_in,
+        orientation = 180
+    )
+    
+    taper = Dout << Dtaper
+    taper.connect(
+        port='in',
+        destination=Dout.ports['feedline_out']
+    )
+        
+    Dout = Dout.flatten()
+    Dout.ports = {}
+    Dout.add_port(name='feedline_in', midpoint=(Dout.xmin, -feed_width_in/2), 
+                  width=feed_width_in, orientation=180)
+    Dout.add_port(name='feedline_out', midpoint=(Dout.xmax, -feed_width_in/2), 
+                  width=feed_width_out, orientation=0)
+    for port in old_ports:
+        if 'spectral_kid' in port.name or 'broadband' in port.name:
+            Dout.ports[port.name] = port
+
+    return Dout
+
 def add_terminator(
     D, feed_width_in, feed_width_out, l0, 
     meander_width, meander_length,
@@ -863,7 +960,7 @@ def add_terminator(
         NewFeedline.add_port(
             name=f'meander_{ii}', 
             midpoint=(thisx, thisy), 
-            width=feed_width_out, 
+            width=meander_width, 
             orientation=90*(-1)**ii
         )
         if ii < len(meander_spacings):
@@ -872,89 +969,40 @@ def add_terminator(
     def create_meander():
         Dmeander = pg.Device()
         
-        Line0 = pg.rectangle(size=(feed_width_out, l0), layer=signal_layer)
+        Line0 = pg.rectangle(size=(meander_width, l0), layer=lossy_layer)
         line0 = Dmeander << Line0
         
-        x1 = -(meander_side_length-meander_gap+meander_width)/2
-        y1 = -2*meander_gap
-        x2 = x1 + meander_gap
+        x0 = 0
+        y0 = 0
+        x1 = meander_side_length/2
+        y1 = y0 + meander_gap
+        x2 = x1 - meander_side_length
         y2 = y1 + meander_gap
-        x3 = meander_gap - meander_width/2
-        y3 = y2 + 2*meander_gap
+        x3 = x0
         manual_path0 = [
-            (0,0),
-            (x1, 0),
+            (x0, y0),
+            (x1, y0),
             (x1, y1),
             (x2, y1),
             (x2, y2),
-            (x3, y2),
-            (x3, y3)
+            (x3, y2)
         ]
         P0 = Path(manual_path0)
         X = CrossSection()
         X.add(width=meander_width, offset=0, layer=lossy_layer)
         Line1 = P0.extrude(X)
-        line1 = Dmeander << Line1
-        
-        
-        dx = line0.center[0] - (x1+meander_gap/2)
-        dy = line0.ymax - line1.ymin
-        line1.move(
-            origin=(0, 0), 
-            destination=(dx, dy)
-        )
-        
-        y1 = meander_gap - meander_width/2
-        x1 = -meander_side_length + meander_gap
-        y2 = y1 + 3*meander_gap
-        x2 = 0
-        y3 = y2 + meander_width/2
-        manual_path1 = [
-            (0,0),
-            (0, y1),
-            (x1, y1),
-            (x1, y2),
-            (x2, y2),
-            (x2, y3)
-        ]
-        P1 = Path(manual_path1)
-        Line2 = P1.extrude(X)
-        
-        x0 = meander_gap
-        y0 = meander_gap
-        y1 = y0+meander_gap
-        x1 = x0 -meander_side_length + meander_gap
-        y2 = y1 + meander_gap
-        x2 = x0
-        y3 = y2 + 2*meander_gap + meander_width/2
-        manual_path2 = [
-            (x0, y0),
-            (x0, y1),
-            (x1, y1),
-            (x1, y2),
-            (x2, y2),
-            (x2, y3)
-        ]
-        P2 = Path(manual_path2)
-        Line3 = P2.extrude(X)
-        
-        d2y = Line2.ysize
         
         length0 = P0.length()
-        length_per_turn = P1.length() + P2.length()
+        length_per_turn = P0.length()
         n_turns = int((meander_length - length0)/(length_per_turn)) + 1
+        dy = Line0.ysize - meander_width/2
+        d2y = Line1.ysize - meander_width
         for _ in range(n_turns):
-            line2 = Dmeander << Line2
-            line3 = Dmeander << Line3
-            line2.move(
+            line1 = Dmeander << Line1
+            line1.move(
                 origin=(0,0),
-                destination=(dx-meander_width/2, dy+meander_width/2)
+                destination=(line0.center[0], dy)
             )
-            line3.move(
-                origin=(0,0),
-                destination=(dx-meander_width/2, dy)
-            )
-            
             dy += d2y
         
         Dmeander.add_port(
@@ -977,12 +1025,289 @@ def add_terminator(
     Dout.ports = {}
     Dout.add_port(name='feedline_in', midpoint=(Dout.xmin, -feed_width_in/2), 
                   width=feed_width_in, orientation=180)
-    Dout.add_port(name='feedline_out', midpoint=(Dout.xmax, -feed_width_out/2), 
+    Dout.add_port(name='feedline_out', midpoint=(Dout.xmax, -feed_width_in/2), 
                   width=feed_width_out, orientation=0)
     for port in old_ports:
         if 'spectral_kid' in port.name or 'broadband' in port.name:
             Dout.ports[port.name] = port
 
     return Dout
+
+def create_double_meander(
+    meander_width, n_turns,
+    meander_side_length, meander_gap, layer
+    ):
+    """
+    Creates a Device of a two-sided meander line.
     
+    Parameters:
+    meander_width: Width of meander line in microns.
+    n_turns (int): number of turns of the meander.
+    meander_side_length: Side length of meander in microns.
+    meander_gap: Gap between the two legs of the meander in microns.
+    layer: Device layer for the meander.
+    """
     
+    Dmeander = pg.Device()
+    
+    x1 = -(meander_side_length-meander_gap+meander_width)/2
+    y1 = -2*meander_gap
+    x2 = x1 + meander_gap
+    y2 = y1 + meander_gap
+    x3 = meander_gap - meander_width/2
+    y3 = y2 + 2*meander_gap
+    manual_path0 = [
+        (0,0),
+        (x1, 0),
+        (x1, y1),
+        (x2, y1),
+        (x2, y2),
+        (x3, y2),
+        (x3, y3)
+    ]
+    P0 = Path(manual_path0)
+    X = CrossSection()
+    X.add(width=meander_width, offset=0, layer=layer)
+    Line1 = P0.extrude(X)
+    line1 = Dmeander << Line1
+    
+    y1 = meander_gap - meander_width/2
+    x1 = -meander_side_length + meander_gap
+    y2 = y1 + 3*meander_gap
+    x2 = 0
+    y3 = y2 + meander_width/2
+    manual_path1 = [
+        (0,0),
+        (0, y1),
+        (x1, y1),
+        (x1, y2),
+        (x2, y2),
+        (x2, y3)
+    ]
+    P1 = Path(manual_path1)
+    Line2 = P1.extrude(X)
+    
+    x0 = meander_gap
+    y0 = meander_gap
+    y1 = y0+meander_gap
+    x1 = x0 -meander_side_length + meander_gap
+    y2 = y1 + meander_gap
+    x2 = x0
+    y3 = y2 + 2*meander_gap + meander_width/2
+    manual_path2 = [
+        (x0, y0),
+        (x0, y1),
+        (x1, y1),
+        (x1, y2),
+        (x2, y2),
+        (x2, y3)
+    ]
+    P2 = Path(manual_path2)
+    Line3 = P2.extrude(X)
+    
+    d2y = Line2.ysize
+    dy = 0
+    
+    for _ in range(n_turns-1):
+        line2 = Dmeander << Line2
+        line3 = Dmeander << Line3
+        line2.move(
+            origin=(0,0),
+            destination=(-meander_width/2, dy+meander_width/2)
+        )
+        line3.move(
+            origin=(0,0),
+            destination=(-meander_width/2, dy)
+        )
+        dy += d2y
+    
+    x0 = line2.xmax-meander_width/2
+    y0 = line2.ymax-meander_width/2
+    y1 = y0 + meander_gap
+    x1 = Dmeander.xmin + meander_width/2
+    y2 = y1 + 3*meander_gap
+    x2 = line1.xmin + meander_width/2
+    y3 = y2 + meander_gap
+    manual_path3 = [
+        (x0, y0),
+        (x0, y1),
+        (x1, y1),
+        (x1, y2),
+        (x2, y2),
+        (x2, y3)
+    ]
+    P3 = Path(manual_path3)
+    Line4 = P3.extrude(X)
+    line4 = Dmeander << Line4
+    
+    x0 = line3.xmax-meander_width/2
+    y0 = line3.ymax-meander_width/2
+    y1 = y0 + meander_gap
+    x1 = line3.xmin + meander_width/2
+    y2 = y1 + meander_gap
+    x2 = line1.xmin + meander_width/2 + meander_gap
+    y3 = y2 + 2*meander_gap
+    manual_path4 = [
+        (x0, y0),
+        (x0, y1),
+        (x1, y1),
+        (x1, y2),
+        (x2, y2),
+        (x2, y3)
+    ]
+    P4 = Path(manual_path4)
+    Line5 = P4.extrude(X)
+    line5 = Dmeander << Line5
+    
+    return Dmeander
+
+def add_final_kid(
+    D, feed_width_in, feed_width_out, extra_feed_length,
+    meander_width, n_turns, meander_side_length, meander_gap,
+    hC, wC, gapC, w_coupler_connector, l0_coupler_connector,
+    coupling_ground_height, coupling_ground_width,
+    coupling_ground_gap, w_coupler, h_coupler, distance_to_cpw,
+    Al_layer, Nb_layer, ground_layer
+    ):
+    """
+    Adds a KID at the end of the feedline which has the feedline directly
+    inject power into the inductor.
+    
+    Parameters:
+    D: The filterbank Device to add the KID to.
+    feed_width_in: The width of the input end of the feedline in microns.
+    feed_width_out: The width of the output end of the feedline in microns.
+    extra_feed_length: Extra length to add to the output end of the feedline
+        before reaching the final KID.
+    All others: See make_kid
+    
+    Returns:
+    Dout: The Device with the final KID added.
+    """
+    Dout = copy.deepcopy(D)
+    
+    ### Add extra feedline length
+    NewFeedline = pg.rectangle(
+        size=(extra_feed_length, feed_width_out),
+        layer=Nb_layer
+    )
+    NewFeedline.add_port(
+        name='in', 
+        midpoint=(NewFeedline.xmin, feed_width_out/2), 
+        width=feed_width_out, 
+        orientation=180
+    )
+    NewFeedline.add_port(
+        name='out', 
+        midpoint=(NewFeedline.xmax, feed_width_out/2), 
+        width=feed_width_out, 
+        orientation=0
+    )
+    new_feedline = Dout << NewFeedline
+    new_feedline.connect(port='in', destination=Dout.ports['feedline_out'])
+    
+    ### Add the inductor meander
+    Dmeander = create_double_meander(
+        meander_width, n_turns,
+        meander_side_length, meander_gap, Al_layer
+    )
+    Dmeander.add_port(
+        name = 'in',
+        midpoint = (Dmeander.center[0], Dmeander.ymin),
+        orientation = 270
+    )
+    meander = Dout << Dmeander
+    meander.connect(port='in', destination=new_feedline.ports['out'])
+    
+    CapPlate = pg.rectangle(size=(wC, hC), layer=Nb_layer)
+    plate0 = Dout << CapPlate
+    plate1 = Dout << CapPlate
+    plate0.move(
+        origin=(0,plate0.ymax),
+        destination=(meander.xmax, meander.center[1]-gapC/2)
+    )
+    plate1.move(
+        origin=(0,0),
+        destination=(meander.xmax, meander.center[1]+gapC/2)
+    )
+    
+    ### Add the readout coupler
+    ground_overshoot = (coupling_ground_width-w_coupler)/2
+    coup_port = Dout.add_port(name='coupler', 
+                        midpoint=(plate1.xmax, plate1.ymax-w_coupler_connector/2),
+                        orientation = 0)
+
+    R2 = pg.rectangle(size=(l0_coupler_connector, w_coupler_connector), layer=Nb_layer)
+    R2.add_port(name='1', midpoint=(0, w_coupler_connector/2), orientation=180)
+    R2.add_port(name='2', 
+                midpoint=(l0_coupler_connector, w_coupler_connector/2), 
+                orientation=0)
+
+    R3 = pg.rectangle(size=(w_coupler, h_coupler), layer=Nb_layer)
+    R3.add_port(name='1', midpoint=(0, h_coupler-w_coupler_connector/2), orientation=180)
+    R3.add_port(name='2', midpoint=(w_coupler/2, h_coupler), orientation=90)
+
+    h_coupler1 = h_coupler + coupling_ground_gap + distance_to_cpw
+    R4 = pg.rectangle(size=(w_coupler, h_coupler1), layer=Nb_layer)
+
+    coupler_connector = Dout << R2
+    coupler0 = Dout << R3
+    coupler1 = Dout << R4
+
+    coupler_connector.connect(port='1', destination=coup_port)
+    coupler0.connect(port='1', destination=coupler_connector.ports['2'])
+    pos = np.array(coupler0.ports['2'].midpoint)
+    pos[1] += coupling_ground_height/2 - h_coupler
+    coupler1.move(origin=(coupler1.center[0], 0), destination=pos)
+
+
+    R5 = pg.rectangle(
+        size=(
+            coupling_ground_width+2*coupling_ground_gap,
+            coupling_ground_height+2*coupling_ground_gap
+        ),
+        layer=ground_layer
+    )
+    R6 = pg.rectangle(
+        size=(
+            coupling_ground_width,
+            coupling_ground_height
+        ),
+        layer=ground_layer
+    )
+    R6.move(origin=(0,0), destination=(coupling_ground_gap, coupling_ground_gap))
+    R5 = pg.boolean(A = R5, B = R6, operation = 'not', layer=ground_layer)
+
+    ground_gap = Dout << R5
+    ground_gap.move(
+        origin=ground_gap.center,
+        destination=coupler0.ports['2'].midpoint
+    )
+
+    readout_midpt = (coupler1.center[0], coupler1.ymax)
+    Dout.add_port(name=f'terminator_kid', 
+               midpoint=readout_midpt,
+               orientation = 90)
+    
+    ### Propagate only the ports we need
+    Dout = Dout.flatten()
+    old_ports = Dout.ports.values()
+    Dout.ports = {}
+    for port in old_ports:
+            if 'spectral_kid' in port.name or 'broadband' in port.name \
+                or 'terminator' in port.name:
+                Dout.ports[port.name] = port
+    
+    return Dout
+
+#####################
+### R E A D O U T ###
+#####################
+
+# def add_readout_line(
+#     D, read_in_loc, read_out_loc, cpw_bend_radius,
+#     cpw_gap_width, cpw_center_width, cpw_bridge_spacing,
+#     cpw_bridge_width, large_cpw_pad_offset, large_cpw_gap_width, 
+#     large_cpw_center_width, large_cpw_length, cpw_transition_length,
+#     Al_layer, gnd_layer, Si_layer
+#     ):
