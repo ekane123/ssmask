@@ -16,7 +16,7 @@ from .simple_rf_models import get_mstrip_params
 ###########################
 
 def make_filter(f0, eps_eff, bend_radius, h0, h1,
-                w_mstrip, wcap, hcap, cgap, wgnd, hgnd,
+                w_mstrip, wcap0, wcap1, hcap, cgap, wgnd, hgnd,
                 gnd_gap, signal_layer, gnd_layer, name=None):
     '''
     Creates a phidl Device of a single-pole microstrip filter.
@@ -29,7 +29,8 @@ def make_filter(f0, eps_eff, bend_radius, h0, h1,
             preceding the coupling capacitors.
         h1 <float>: height of the segments leading into the first bend on either side
         w_mstrip <float>: microstrip width in microns
-        wcap: coupling capacitor plate width
+        wcap0: coupling capacitor plate width for the input capacitor
+        wcap1: coupling capacitor plate width for the output capacitor
         hcap: coupling capacitor plate height
         cgap: gap between the two plates on the signal layer
         wgnd: width of ground cutout
@@ -58,7 +59,8 @@ def make_filter(f0, eps_eff, bend_radius, h0, h1,
         
     Line0 = pg.rectangle(size=(w_mstrip, h0), layer=signal_layer)
     
-    CapPlate = pg.rectangle(size=(wcap, hcap), layer=signal_layer)    
+    CapPlate0 = pg.rectangle(size=(wcap0, hcap), layer=signal_layer)    
+    CapPlate1 = pg.rectangle(size=(wcap1, hcap), layer=signal_layer) 
     
     GndCut = pg.rectangle(size=(wgnd+2*gnd_gap, hgnd+2*gnd_gap), layer=gnd_layer)
     Rsubtr = pg.rectangle(size=(wgnd, hgnd), layer=gnd_layer)
@@ -72,8 +74,8 @@ def make_filter(f0, eps_eff, bend_radius, h0, h1,
     FiltLine2 = pg.rectangle(size=(l2, w_mstrip), layer=signal_layer)
 
     line0 = D << Line0
-    plate0 = D << CapPlate
-    plate1 = D << CapPlate
+    plate0 = D << CapPlate0
+    plate1 = D << CapPlate0
     filtline0 = D << FiltLine0
     gndcut = D << GndCut
     arc0 = D << Arc
@@ -86,8 +88,8 @@ def make_filter(f0, eps_eff, bend_radius, h0, h1,
     filtline3 = D << FiltLine1
     arc5 = D << Arc
     filtline4 = D << FiltLine0
-    plate2 = D << CapPlate
-    plate3 = D << CapPlate
+    plate2 = D << CapPlate1
+    plate3 = D << CapPlate1
     gndcut1 = D << GndCut
     
     
@@ -239,7 +241,7 @@ def make_broadband_coupler(l_conn, w_conn, w_cap, h_cap, ground_gap, cap_gap,
 
 
 def make_filterbank(f0s, spacing, eps_eff, bend_radius, h0, h1, 
-                    w_mstrip, wcaps, hcaps, cgaps, wgnd, hgnd, 
+                    w_mstrip, wcaps0, wcaps1, hcaps, cgaps, wgnd, hgnd, 
                     gnd_gap, signal_layer, gnd_layer):
     '''
     Creates a phidl Device of a filterbank.
@@ -257,12 +259,13 @@ def make_filterbank(f0s, spacing, eps_eff, bend_radius, h0, h1,
     for ii in range(len(f0s)):
         # generate a filter with resonant frequency f0
         f0 = f0s[ii]
-        wcap = wcaps[ii]
+        wcap0 = wcaps0[ii]
+        wcap1 = wcaps1[ii]
         hcap = hcaps[ii]
         cgap = cgaps[ii]
         
         D_filt = make_filter(f0, eps_eff, bend_radius, h0, h1,
-                w_mstrip, wcap, hcap, cgap, wgnd, hgnd,
+                w_mstrip, wcap0, wcap1, hcap, cgap, wgnd, hgnd,
                 gnd_gap, signal_layer, gnd_layer, name=ii)
         
         if ii%2 == 1:
@@ -449,12 +452,12 @@ def make_kid(w_ind, l_ind, l0, final_h,
 def make_filterbank_with_kids(
     # parameters for filters
     filter_f0s, spacing, eps_eff, bend_radius, h0, h1,
-    w_mstrip, filter_hcaps, filter_wcaps, filter_cgaps, 
+    w_mstrip, filter_hcaps, filter_wcaps0, filter_wcaps1, filter_cgaps, 
     filter_wgnd, filter_hgnd, filter_gnd_gap,
     # parameters for KIDs
     kid_hcaps, kid_wcaps,
     w_inds, l_inds, l0, final_h,
-    d_stubs, l_stubs, dist_from_mmwave_line,
+    d_stubs, l_stubs, stub_horiz_dist, dist_from_mmwave_line,
     kid_cgap, kid_wcoupler_connector, kid_l0coupler_connector,
     coupling_ground_height, coupling_ground_width,
     coupling_ground_gap, kid_wcouplers, kid_hcouplers, distance_to_cpw,
@@ -466,6 +469,7 @@ def make_filterbank_with_kids(
     Parameters:
     d_stubs: Distances of tuning stubs from the Al line in microns
     l_stubs: Lengths of tuning stubs in microns
+    stub_horiz_dist: Distance of the bend in the stub from the Nb line in microns
     dist_from_mmwave_line: Distance of the end of each coupling capacitor from the mmwave feedline.
     Line 2 and 3 - see make_fiterbank
     All other lines - see make_kid
@@ -475,7 +479,7 @@ def make_filterbank_with_kids(
     """
     fb = make_filterbank(
         filter_f0s, spacing, eps_eff, bend_radius, h0, h1, 
-        w_mstrip, filter_wcaps, filter_hcaps, filter_cgaps, 
+        w_mstrip, filter_wcaps0, filter_wcaps1, filter_hcaps, filter_cgaps, 
         filter_wgnd, filter_hgnd, filter_gnd_gap, 
         Nb_layer, ground_layer
     )
@@ -509,10 +513,23 @@ def make_filterbank_with_kids(
         R0 = pg.rectangle(size=(w_mstrip, conn_len))
         R0.add_port(name='1', midpoint=(w_mstrip/2, 0), orientation=-90)
         R0.add_port(name='2', midpoint=(w_mstrip/2, conn_len), orientation=90)
-        R0.add_port(name='stub', midpoint = (w_mstrip, conn_len-dstub-w_mstrip/2), 
-                    orientation=0)
-        R1 = pg.rectangle(size=(lstub, w_mstrip))
-        R1.add_port(name='1', midpoint=(lstub, w_mstrip/2), orientation=0)
+        # R0.add_port(name='stub', midpoint = (w_mstrip, conn_len-dstub-w_mstrip/2), 
+        #             orientation=0)
+        R0.add_port(name='stub', midpoint = (0, conn_len-dstub-w_mstrip/2), 
+                    orientation=180)
+        manual_path = [
+            (0,0),
+            (-stub_horiz_dist, 0),
+            (-stub_horiz_dist, -(lstub-stub_horiz_dist))
+        ]
+        P0 = Path(manual_path)
+        X = CrossSection()
+        X.add(width=w_mstrip, offset=0, layer=Nb_layer)
+        R1 = P0.extrude(X)
+        R1.add_port(name='1', midpoint=(0,0), orientation=0)
+        
+        # R1 = pg.rectangle(size=(lstub, w_mstrip))
+        # R1.add_port(name='1', midpoint=(lstub, w_mstrip/2), orientation=0)
 
         rect0 = fb << R0
         rect1 = fb << R1

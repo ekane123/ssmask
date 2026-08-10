@@ -114,7 +114,7 @@ def ThreePortNetwork_ExtraLine_Absorber(
     return Ntwk
 
 def SpectralChannel3PortNetwork_ExtraLine(
-    Band, length, extra_length, Z0, Z1, C, epsr, lossTan=0
+    Band, length, extra_length, Z0, Z1, Cin, Cout, epsr, lossTan=0
     ):
     """
     Create a Network representing a 3-port resonant filter.
@@ -123,11 +123,11 @@ def SpectralChannel3PortNetwork_ExtraLine(
     
      port 2
     |      |
-    |      |    __________________    | C |    ____________    | C |
-    o----------|__ extra_length __|---|   |---|__ length __|---|   |---
-    |      |                          |   |                    |   |  port 1
+    |      |    __________________    | Cin |    ____________    | Cout |
+    o----------|__ extra_length __|---|     |---|__ length __|---|      |--------
+    |      |                          |     |                    |      |  port 1
     |      |
-    |      o-----------------------------------------------------------
+    |      o---------------------------------------------------------------------
     |      |
     |      |
      port 0
@@ -162,11 +162,12 @@ def SpectralChannel3PortNetwork_ExtraLine(
     
     ### Create a 2-port Network for the capacitor-coupled shunt resonance.
     Yr = (1 + 2j*Qloss*x0)/R
-    Zc = 1/(1j*omega*C)
-    A = 1 + Zc*Yr
-    B = 2*Zc + Zc**2 * Yr
+    Zc1 = 1/(1j*omega*Cin)
+    Zc2 = 1/(1j*omega*Cout)
+    A = 1 + Zc1*Yr
+    B = Zc1 + Zc2 + Zc1*Zc2*Yr
     C = Yr
-    D = 1 + Zc*Yr
+    D = 1 + Zc2*Yr
     S = ABCD2S(A, B, C, D, Z0)
     S = np.moveaxis(S, -1, 0)
     Ntwk_res = rf.Network(frequency=Band, s=S, z0=Z0)
@@ -183,8 +184,8 @@ def SpectralChannel3PortNetwork_ExtraLine(
     return Ntwk
     
 def FilterbankLossy_ExtraLine(
-    Band, lengths, extra_length, Z0, Z1, Cs, 
-    epsr, physSep, lossTan=0, verbose=False
+    Band, filter_lengths, tl_lengths, extra_length, Z0, Z1, 
+    Cs_in, Cs_out, epsr, lossTan=0, verbose=False
     ):
     """
     Creates a filterbank represented by a cascaded series of 
@@ -194,24 +195,29 @@ def FilterbankLossy_ExtraLine(
     
     # initialize current network to the first spectral channel
     CurrentNtwk = SpectralChannel3PortNetwork_ExtraLine(
-        Band, lengths[0], extra_length, Z0, Z1, Cs[0], epsr, lossTan
+        Band, filter_lengths[0], extra_length, Z0, Z1, 
+        Cs_in[0], Cs_out[0], epsr, lossTan
     )
     # loop to create filter bank with arbitrary # of channels and create network
-    pbar = range(len(lengths)-1)
+    pbar = range(len(filter_lengths)-1)
     if verbose:
         pbar = tqdm(pbar, leave=False)
     for i in pbar:
-        length_current = lengths[i]    
-        length_nxt, C_nxt = lengths[i+1], Cs[i+1]
+        length_current = filter_lengths[i]    
+        length_nxt =  filter_lengths[i+1]
+        Cin_nxt = Cs_in[i+1]
+        Cout_nxt = Cs_out[i+1]
         
         # create Network object for next SC
         NextSC = SpectralChannel3PortNetwork_ExtraLine(
-            Band, length_nxt, extra_length, Z0, Z1, C_nxt, epsr, lossTan
+            Band, length_nxt, extra_length, Z0, Z1, 
+            Cin_nxt, Cout_nxt, epsr, lossTan
         )
         # create interconnecting transmission line
         lambda_current = length_current * 2
-        lineLength = physSep*lambda_current
-        TLine = TransmissionLineLossy(Band, lineLength, Z0, epsr, lossTan)
+        TLine = TransmissionLineLossy(
+            Band, tl_lengths[i], Z0, epsr, lossTan
+        )
         
         # connect current network to the transmission line
         N = CurrentNtwk.nports
