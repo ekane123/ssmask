@@ -1,6 +1,7 @@
 README.md
 pyproject.toml
 setup.py
+ssmask/Rs_calc.py
 ssmask/__init__.py
 ssmask/fit_funcs.py
 ssmask/fitter.py
@@ -9,6 +10,7 @@ ssmask/gds_Feb2026.py
 ssmask/gds_Jul2026.py
 ssmask/gds_Jun2026.py
 ssmask/gds_Mar2026.py
+ssmask/gds_NewMUSIC_Aug2026.py
 ssmask/klopfenstein.py
 ssmask/scikit_rf.py
 ssmask/simple_rf_models.py
