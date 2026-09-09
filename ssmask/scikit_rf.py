@@ -140,8 +140,10 @@ def SpectralChannel3PortNetwork_ExtraLine(
     Band (skrf.Frequency): frequencies to simulate the Network at, in Hz.
     length: length of resonant half-wave filter in meters.
     extra_length: length of extra transmission line in meters.
-    Z0: impedance of all ports and transmission lines in Ohms.
-    C: coupling capacitance.
+    Z0: impedance of main half-wave resonant line and transmission lines in Ohms.
+    Z1: impedance of extra length of line.
+    Cin: Input coupling capacitance.
+    Cout: Output coupling capacitance.
     epsr: relative permittivity of the transmission line.
     lossTan: dielectric loss tangent of the transmission line. lossTan = 1/Qloss.
     
@@ -190,9 +192,25 @@ def FilterbankLossy_ExtraLine(
     """
     Creates a filterbank represented by a cascaded series of 
     spectral channels and lossy transmission lines.
-    """
-    v = c/epsr**.5
     
+    Extra length of line leading to the input coupling capacitor
+    is represented as a transmission line.
+    
+    Parameters:
+    Band (skrf.Frequency): frequencies to simulate the Network at, in Hz.
+    filter_lengths: lengths of resonant half-wave filter in meters.
+    tl_lengths: lengths along the feedline between filters.
+    extra_lengths: length of extra transmission line in meters.
+    Z0: impedance of main half-wave resonant line and transmission lines in Ohms.
+    Z1: impedance of extra length of line.
+    Cs_in: input coupling capacitances.
+    Cs_out: output coupling capacitances.
+    epsr: relative permittivity of the transmission line.
+    lossTan: dielectric loss tangent of the transmission line. lossTan = 1/Qloss.
+    
+    Returns:
+    Ntwk: skrf.Network object representing the filterbank.
+    """    
     # initialize current network to the first spectral channel
     CurrentNtwk = SpectralChannel3PortNetwork_ExtraLine(
         Band, filter_lengths[0], extra_length, Z0, Z1, 
@@ -203,7 +221,6 @@ def FilterbankLossy_ExtraLine(
     if verbose:
         pbar = tqdm(pbar, leave=False)
     for i in pbar:
-        length_current = filter_lengths[i]    
         length_nxt =  filter_lengths[i+1]
         Cin_nxt = Cs_in[i+1]
         Cout_nxt = Cs_out[i+1]
@@ -214,7 +231,6 @@ def FilterbankLossy_ExtraLine(
             Cin_nxt, Cout_nxt, epsr, lossTan
         )
         # create interconnecting transmission line
-        lambda_current = length_current * 2
         TLine = TransmissionLineLossy(
             Band, tl_lengths[i], Z0, epsr, lossTan
         )
@@ -229,6 +245,253 @@ def FilterbankLossy_ExtraLine(
     
     return CurrentNtwk
 
+def SpectralChannel3PortNetwork_ShuntC(
+    Band, length, Z0, Cshunt, Cin, Cout, epsr, lossTan=0
+    ):
+    """
+    Create a Network representing a 3-port resonant filter.
+    All ports and transmission lines have impedance Z0.
+    The Network geometry is as follows:
+    
+     port 2
+    |      |
+    |      |          | Cin |    ____________    | Cout |
+    o-----------------|     |---|__ length __|---|      |---------
+    |      |    |     |     |                    |      |
+    |      |  -----
+    |      |  Cshunt                                        port 1
+    |      |  -----
+    |      |    |
+    |      o------------------------------------------------------
+    |      |
+    |      |
+     port 0
+     
+    The transmission line between the two capacitors is a half-wavelength
+    resonator. In this model, we replace it with an equivalent RLC shunt 
+    to ground, which is approximately correct near its resonant frequency.
+     
+    Parameters:
+    Band (skrf.Frequency): frequencies to simulate the Network at, in Hz.
+    length: length of resonant half-wave filter in meters.
+    Z0: impedance of main half-wave resonant line and transmission lines in Ohms.
+    Cshunt: Shunt coupling capacitance preceding the input coupling capacitance.
+    Cin: Input coupling capacitance.
+    Cout: Output coupling capacitance.
+    epsr: relative permittivity of the transmission line.
+    lossTan: dielectric loss tangent of the transmission line. lossTan = 1/Qloss.
+    
+    Returns:
+    Ntwk: skrf.Network object representing the 3-port network.
+    """
+    alpha = np.pi*np.sqrt(epsr)*Band.f/c*lossTan # attenuation constant in Np/m    
+    Qloss = 1/lossTan # Loss Q of the resonator
+    wavelen = 2*length
+    f0 = c / (wavelen * epsr**.5)
+    R = Z0/(alpha * length) # Shunt resistance of the equivalent resonator
+
+    x0 = (Band.f-f0)/f0
+    omega = 2*np.pi*Band.f
+    
+    ### Generate ABCD parameters for the shunt capacitance.
+    As = np.full(len(omega), 1)
+    Bs = np.full(len(omega), 0)
+    Cs = 1j*omega*Cshunt
+    Ds = np.full(len(omega), 1)
+    ABCD_shunt = np.array([[As, Bs], [Cs, Ds]])
+        
+    ### Generate ABCD parameters for the capacitor-coupled resonator.
+    Yr = (1 + 2j*Qloss*x0)/R
+    Zc1 = 1/(1j*omega*Cin)
+    Zc2 = 1/(1j*omega*Cout)
+    Ar = 1 + Zc1*Yr
+    Br = Zc1 + Zc2 + Zc1*Zc2*Yr
+    Cr = Yr
+    Dr = 1 + Zc2*Yr
+    ABCD_res = np.array([[Ar, Br], [Cr, Dr]])
+    
+    ### Cascade the S-parameters.
+    ABCD_shunt = np.transpose(ABCD_shunt, axes=(2, 0, 1))
+    ABCD_res = np.transpose(ABCD_res, axes=(2, 0, 1))
+    ABCD = np.matmul(ABCD_shunt, ABCD_res)
+    ABCD = np.transpose(ABCD, axes=(1, 2, 0))
+    A = ABCD[0, 0]
+    B = ABCD[0, 1]
+    C = ABCD[1, 0]
+    D = ABCD[1, 1]
+    
+    ### Generate a 2-port network from the cascaded S-parameters.
+    S = ABCD2S(A, B, C, D, Z0)
+    S = np.moveaxis(S, -1, 0)
+    Ntwk = rf.Network(frequency=Band, s=S, z0=Z0)
+    
+    ### Create a 3-port Network for the junction.
+    S = get_3PortJunction_Sparams(Z0, Z0)
+    S = np.array([S for _ in x0])
+    Ntwk_junction = rf.Network(frequency=Band, s=S, z0=Z0)
+    
+    ### Join the Networks together.
+    Ntwk = rf.network.connect(Ntwk_junction, 1, Ntwk, 0)
+    
+    return Ntwk
+
+def FilterbankLossy_ShuntC(
+    Band, filter_lengths, tl_lengths, Z0, 
+    Cs_shunt, Cs_in, Cs_out, epsr, 
+    lossTan=0, verbose=False
+    ):
+    """
+    Creates a filterbank represented by a cascaded series of 
+    spectral channels and lossy transmission lines.
+    
+    Extra length of line leading to the input coupling capacitor
+    is represented as a shunt capacitance to ground.
+    
+    Parameters:
+    Band (skrf.Frequency): frequencies to simulate the Network at, in Hz.
+    filter_lengths: lengths of resonant half-wave filter in meters.
+    tl_lengths: lengths along the feedline between filters.
+    Z0: impedance of main half-wave resonant line and transmission lines in Ohms.
+    Cs_shunt: Shunt coupling capacitances.
+    Cs_in: input coupling capacitances.
+    Cs_out: output coupling capacitances.
+    epsr: relative permittivity of the transmission line.
+    lossTan: dielectric loss tangent of the transmission line. lossTan = 1/Qloss.
+    
+    Returns:
+    Ntwk: skrf.Network object representing the filterbank.
+    """    
+    # initialize current network to the first spectral channel
+    CurrentNtwk = SpectralChannel3PortNetwork_ShuntC(
+        Band, filter_lengths[0], Z0, 
+        Cs_shunt[0], Cs_in[0], Cs_out[0], epsr, lossTan
+    )
+    
+    # loop to create filter bank with arbitrary # of channels and create network
+    pbar = range(len(filter_lengths)-1)
+    if verbose:
+        pbar = tqdm(pbar, leave=False)
+    for i in pbar:
+        length_nxt =  filter_lengths[i+1]
+        Cin_nxt = Cs_in[i+1]
+        Cout_nxt = Cs_out[i+1]
+        Cshunt_nxt = Cs_shunt[i+1]
+        
+        # create Network object for next SC  
+        NextSC = SpectralChannel3PortNetwork_ShuntC(
+            Band, length_nxt, Z0, 
+            Cshunt_nxt, Cin_nxt, Cout_nxt, epsr, lossTan
+        )
+        
+        # create interconnecting transmission line
+        TLine = TransmissionLineLossy(
+            Band, tl_lengths[i], Z0, epsr, lossTan
+        )
+        
+        # connect current network to the transmission line
+        N = CurrentNtwk.nports
+        InterNtwk = rf.network.connect(CurrentNtwk, N-1, TLine, 0)
+        
+        # connect current network to the next SC
+        N = InterNtwk.nports
+        CurrentNtwk = rf.network.connect(InterNtwk, N-1, NextSC, 0)           
+    
+    return CurrentNtwk
+
+def FilterbankLossy_ShuntC_ExtraStubs(
+    Band, filter_lengths, filter_idxs, tl_lengths, 
+    Z0, Cs_shunt, Cs_in, Cs_out, epsr, 
+    lossTan=0, verbose=False
+    ):
+    """
+    Creates a filterbank represented by a cascaded series of 
+    spectral channels and lossy transmission lines.
+    
+    Extra length of line leading to the input coupling capacitor
+    is represented as a shunt capacitance to ground.
+    
+    There is now the option to add shunt capacitances which 
+    do not lead into a filter.
+    
+    Parameters:
+    Band (skrf.Frequency): frequencies to simulate the Network at, in Hz.
+    filter_lengths: lengths of resonant half-wave filter in meters.
+    filter_idxs: Indices (into Cs_shunt) for which shunts 
+        are followed by filters.
+        Should be same length as filter_lengths, Cs_in, and Cs_out.
+        First entry should be 0, last entry should be len(Cs_shunt)-1.
+        so that the filterbank starts and ends with a stub that is
+        coupled to a filter.
+    tl_lengths: lengths along the feedline between filters.
+        Length should be len(Cs_shunt)-1.
+    Z0: impedance of main half-wave resonant line and transmission lines in Ohms.
+    Cs_shunt: Shunt coupling capacitances.
+    Cs_in: input coupling capacitances.
+    Cs_out: output coupling capacitances.
+    epsr: relative permittivity of the transmission line.
+    lossTan: dielectric loss tangent of the transmission line. lossTan = 1/Qloss.
+    
+    Returns:
+    Ntwk: skrf.Network object representing the filterbank.
+    """
+    filter_idxs = np.unique(np.sort(filter_idxs))
+    if not(filter_idxs[0]==0 and filter_idxs[-1]==len(Cs_shunt)-1):
+        raise ValueError(
+            "Minimum and maximum values in filter_idxs should be"
+            "0 and len(Cs_shunt)-1."
+        )
+    
+    # initialize current network to the first spectral channel
+    CurrentNtwk = SpectralChannel3PortNetwork_ShuntC(
+        Band, filter_lengths[0], Z0, 
+        Cs_shunt[0], Cs_in[0], Cs_out[0], epsr, lossTan
+    )
+    
+    # loop to create filter bank with arbitrary # of channels and create network
+    pbar = range(1, len(Cs_shunt))
+    if verbose:
+        pbar = tqdm(pbar, leave=False)
+    for i in pbar:
+        Cshunt_nxt = Cs_shunt[i]
+        
+        # create interconnecting transmission line
+        TLine = TransmissionLineLossy(
+            Band, tl_lengths[i-1], Z0, epsr, lossTan
+        )
+        
+        # connect current network to the interconnecting transmission line
+        N = CurrentNtwk.nports
+        InterNtwk = rf.network.connect(CurrentNtwk, N-1, TLine, 0)
+        
+        if i in filter_idxs:
+            i_filter = np.where(filter_idxs==i)[0][0]
+            length_nxt =  filter_lengths[i_filter]
+            Cin_nxt = Cs_in[i_filter]
+            Cout_nxt = Cs_out[i_filter]
+        
+            ### Create 3-port Network object for next SC  
+            NextNtwk = SpectralChannel3PortNetwork_ShuntC(
+                Band, length_nxt, Z0, 
+                Cshunt_nxt, Cin_nxt, Cout_nxt, epsr, lossTan
+            )
+        else:
+            ### Generate ABCD parameters for the shunt capacitance.
+            omega = 2*np.pi*Band.f
+            As = np.full(len(omega), 1)
+            Bs = np.full(len(omega), 0)
+            Cs = 1j*omega*Cshunt_nxt
+            Ds = np.full(len(omega), 1)
+            ABCD_shunt = np.array([[As, Bs], [Cs, Ds]])
+            ### Create a 2-port Network from the ABCD parameters.
+            S = ABCD2S(As, Bs, Cs, Ds, Z0)
+            S = np.moveaxis(S, -1, 0)
+            NextNtwk = rf.Network(frequency=Band, s=S, z0=Z0)
+        
+        # connect current network to the next spectral channel or shunt
+        N = InterNtwk.nports
+        CurrentNtwk = rf.network.connect(InterNtwk, N-1, NextNtwk, 0)           
+    
+    return CurrentNtwk
 
 def TransmissionLineLossy(Band, length, Z0, epsr, lossTan=0):   
     '''
